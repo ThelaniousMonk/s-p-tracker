@@ -21,7 +21,7 @@ st.set_page_config(page_title="S&P 500 Winner Tracker", page_icon="📈", layout
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_analysis(start_iso: str, end_iso: str, label: str, top_n: int):
+def cached_analysis(start_iso: str, end_iso: str, label: str, top_n: int, cache_version: int):
     from sp500_tracker import AnalysisPeriod
 
     period = AnalysisPeriod(label=label, start=date.fromisoformat(start_iso), end=date.fromisoformat(end_iso))
@@ -108,7 +108,7 @@ with tracker_tab:
     if run_clicked and period.start <= today:
         try:
             with st.spinner("Downloading market data and ranking the S&P 500…"):
-                result = cached_analysis(period.start.isoformat(), min(period.end, today).isoformat(), period.label, int(top_n))
+                result = cached_analysis(period.start.isoformat(), min(period.end, today).isoformat(), period.label, int(top_n), 2)
                 st.session_state["analysis_result"] = result
                 st.session_state["analysis_period"] = period
                 st.session_state["analysis_top_n"] = int(top_n)
@@ -146,6 +146,9 @@ with tracker_tab:
             st.altair_chart(chart, width="stretch")
         with table_col:
             st.markdown(f'<div class="section-title"><span class="section-icon">♜</span><h3>Top {result_top_n} winners</h3></div>', unsafe_allow_html=True)
+            if "Current Price" not in top.columns:
+                top = top.copy()
+                top["Current Price"] = pd.NA
             leaderboard = top[["Rank", "Symbol", "Security", "GICS Sector", "Current Price", "Quarterly Return %"]].copy()
             leaderboard["Quarterly Return %"] = pd.to_numeric(leaderboard["Quarterly Return %"], errors="coerce")
             leaderboard["Current Price"] = pd.to_numeric(leaderboard["Current Price"], errors="coerce")
