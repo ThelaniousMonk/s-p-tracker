@@ -146,11 +146,15 @@ with tracker_tab:
             st.altair_chart(chart, width="stretch")
         with table_col:
             st.markdown(f'<div class="section-title"><span class="section-icon">♜</span><h3>Top {result_top_n} winners</h3></div>', unsafe_allow_html=True)
-            leaderboard = top[["Rank", "Symbol", "Security", "Quarterly Return %"]].copy()
+            leaderboard = top[["Rank", "Symbol", "Security", "GICS Sector", "Current Price", "Quarterly Return %"]].copy()
             leaderboard["Quarterly Return %"] = pd.to_numeric(leaderboard["Quarterly Return %"], errors="coerce")
+            leaderboard["Current Price"] = pd.to_numeric(leaderboard["Current Price"], errors="coerce")
             st.dataframe(leaderboard, width="stretch", hide_index=True, height=438, column_config={
                 "Rank": st.column_config.NumberColumn("#", width="small", format="%d"), "Symbol": st.column_config.TextColumn("Ticker", width="small"),
-                "Security": st.column_config.TextColumn("Company", width="medium"), "Quarterly Return %": st.column_config.ProgressColumn("Return", format="%.2f%%", min_value=float(min(0, leaderboard["Quarterly Return %"].min())), max_value=float(max(1, leaderboard["Quarterly Return %"].max())))})
+                "Security": st.column_config.TextColumn("Company", width="medium"),
+                "GICS Sector": st.column_config.TextColumn("Sector", width="medium"),
+                "Current Price": st.column_config.NumberColumn("Price", width="small", format="$%.2f"),
+                "Quarterly Return %": st.column_config.ProgressColumn("Return", format="%.2f%%", min_value=float(min(0, leaderboard["Quarterly Return %"].min())), max_value=float(max(1, leaderboard["Quarterly Return %"].max())))})
 
         safe_label = str(result_period.label).replace(" ", "_").replace("/", "-").replace(":", "-")
         download_a, download_b, note_col = st.columns([1, 1, 2])

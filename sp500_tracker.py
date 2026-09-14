@@ -245,6 +245,40 @@ def benchmark_return(start: date, end: date) -> dict:
     }
 
 
+def download_current_prices(tickers: Iterable[str]) -> pd.DataFrame:
+    """Return the latest available unadjusted close for the requested tickers."""
+    tickers = list(dict.fromkeys(tickers))
+    if not tickers:
+        return pd.DataFrame(columns=["YahooTicker", "Current Price", "Price As Of"])
+
+    data = yf.download(
+        tickers,
+        period="5d",
+        interval="1d",
+        auto_adjust=False,
+        actions=False,
+        progress=False,
+        threads=True,
+        group_by="ticker",
+        timeout=30,
+    )
+
+    rows: list[dict] = []
+    for ticker in tickers:
+        series = _extract_close(data, ticker, len(tickers))
+        if series is None:
+            continue
+        latest_timestamp = pd.Timestamp(series.index[-1])
+        rows.append(
+            {
+                "YahooTicker": ticker,
+                "Current Price": float(series.iloc[-1]),
+                "Price As Of": latest_timestamp.date(),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def run_analysis(
     period: AnalysisPeriod,
     *,
@@ -299,7 +333,22 @@ def run_analysis(
     ]
 
     full_out = full[display_cols].copy()
-    top = full_out.head(max(1, int(top_n))).copy()
+    top_count = max(1, int(top_n))
+    top = full_out.head(top_count).copy()
+
+    # Current quotes are fetched only for displayed winners to keep the request fast.
+    winner_tickers = full.head(top_count)[["Symbol", "YahooTicker"]]
+    current_prices = download_current_prices(winner_tickers["YahooTicker"].tolist())
+    if not current_prices.empty:
+        current_prices = winner_tickers.merge(current_prices, on="YahooTicker", how="left")
+        top = top.merge(
+            current_prices[["Symbol", "Current Price", "Price As Of"]],
+            on="Symbol",
+            how="left",
+        )
+    else:
+        top["Current Price"] = pd.NA
+        top["Price As Of"] = pd.NaT
 
     summary = {
         "label": period.label,
