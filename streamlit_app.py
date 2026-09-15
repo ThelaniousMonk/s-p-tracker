@@ -10,6 +10,7 @@ import streamlit as st
 from sp500_tracker import (
     current_quarter_period,
     custom_period,
+    download_current_prices,
     last_completed_quarter_period,
     quarter_period,
     run_analysis,
@@ -26,6 +27,27 @@ def cached_analysis(start_iso: str, end_iso: str, label: str, top_n: int, cache_
 
     period = AnalysisPeriod(label=label, start=date.fromisoformat(start_iso), end=date.fromisoformat(end_iso))
     return run_analysis(period, top_n=top_n)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_current_prices(symbols: tuple[str, ...], cache_version: int) -> pd.DataFrame:
+    yahoo_tickers = [symbol.replace(".", "-") for symbol in symbols]
+    prices = download_current_prices(yahoo_tickers)
+    if prices.empty:
+        return pd.DataFrame(columns=["Symbol", "Current Price", "Price As Of"])
+    ticker_to_symbol = dict(zip(yahoo_tickers, symbols))
+    prices["Symbol"] = prices["YahooTicker"].map(ticker_to_symbol)
+    return prices[["Symbol", "Current Price", "Price As Of"]]
+
+
+def add_current_prices(stocks: pd.DataFrame, period_ends_today: bool) -> pd.DataFrame:
+    stocks = stocks.drop(columns=["Current Price", "Price As Of"], errors="ignore").copy()
+    if period_ends_today:
+        stocks["Current Price"] = stocks["End Adjusted Close"]
+        stocks["Price As Of"] = stocks["End Trading Date"]
+        return stocks
+    prices = cached_current_prices(tuple(stocks["Symbol"].astype(str)), 1)
+    return stocks.merge(prices, on="Symbol", how="left")
 
 
 def metric_card(label: str, value: str, detail: str, accent: str, icon: str) -> None:
@@ -108,7 +130,7 @@ with tracker_tab:
     if run_clicked and period.start <= today:
         try:
             with st.spinner("Downloading market data and ranking the S&P 500…"):
-                result = cached_analysis(period.start.isoformat(), min(period.end, today).isoformat(), period.label, int(top_n), 2)
+                result = cached_analysis(period.start.isoformat(), min(period.end, today).isoformat(), period.label, int(top_n), 3)
                 st.session_state["analysis_result"] = result
                 st.session_state["analysis_period"] = period
                 st.session_state["analysis_top_n"] = int(top_n)
@@ -129,14 +151,52 @@ with tracker_tab:
         with metric_cols[2]: metric_card("Stocks analyzed", f"{summary['constituents_analyzed']}", "Current S&P 500 universe", "blue", "▥")
         with metric_cols[3]: metric_card("Top winner", f"{winner['Quarterly Return %']:+.2f}%", str(winner["Symbol"]), "purple", "♛")
 
+        view_col, sector_col, sector_count_col = st.columns([1, 2, 1])
+        with view_col:
+            result_view = st.selectbox("Results view", ["Overall leaders", "Top performers by sector"])
+        all_sectors = sorted(full["GICS Sector"].dropna().astype(str).unique())
+        with sector_col:
+            selected_sectors = st.multiselect(
+                "Search or filter sectors",
+                all_sectors,
+                placeholder="All sectors",
+            )
+        with sector_count_col:
+            per_sector_n = st.selectbox("Winners per sector", [1, 2, 3, 5, 10], index=2, disabled=result_view == "Overall leaders")
+
+        filtered = full.copy()
+        if selected_sectors:
+            filtered = filtered[filtered["GICS Sector"].isin(selected_sectors)].copy()
+
+        if result_view == "Top performers by sector":
+            displayed = (
+                filtered.sort_values(["GICS Sector", "Quarterly Return %"], ascending=[True, False])
+                .groupby("GICS Sector", group_keys=False)
+                .head(int(per_sector_n))
+                .copy()
+            )
+            displayed["Sector Rank"] = displayed.groupby("GICS Sector").cumcount() + 1
+            displayed = displayed.sort_values(["GICS Sector", "Sector Rank"]).reset_index(drop=True)
+            result_title = f"Top {per_sector_n} in each sector"
+        else:
+            displayed = filtered.sort_values("Quarterly Return %", ascending=False).head(int(result_top_n)).copy()
+            result_title = f"Top {len(displayed)} winners"
+
+        period_ends_today = summary["effective_end"] >= today
+        if period_ends_today:
+            displayed = add_current_prices(displayed, True)
+        else:
+            with st.spinner("Updating current prices for the displayed winners…"):
+                displayed = add_current_prices(displayed, False)
+
         chart_col, table_col = st.columns([1.35, 1])
         with chart_col:
             st.markdown('<div class="section-title"><span class="section-icon">▥</span><h3>Performance comparison</h3></div>', unsafe_allow_html=True)
-            chart_rows = top[["Symbol", "Quarterly Return %"]].copy()
+            chart_rows = displayed.nlargest(30, "Quarterly Return %")[["Symbol", "Quarterly Return %"]].copy()
             chart_rows.columns = ["Series", "Return"]
             chart_rows = pd.concat([chart_rows, pd.DataFrame({"Series": ["S&P 500", "Average constituent"], "Return": [summary["sp500_return_pct"], summary["constituent_average_pct"]]})], ignore_index=True)
             domain = chart_rows["Series"].tolist()
-            colors = ["#2ee7f2"] * len(top) + ["#a85cff", "#8795c5"]
+            colors = ["#2ee7f2"] * (len(chart_rows) - 2) + ["#a85cff", "#8795c5"]
             chart = alt.Chart(chart_rows).mark_bar(cornerRadiusTopRight=5, cornerRadiusBottomRight=5).encode(
                 y=alt.Y("Series:N", sort="-x", title=None, axis=alt.Axis(labelColor="#c7d1ec")),
                 x=alt.X("Return:Q", title="Return (%)", axis=alt.Axis(labelColor="#9eacd0", titleColor="#9eacd0", gridColor="#263763")),
@@ -145,15 +205,14 @@ with tracker_tab:
             ).properties(height=390).configure_view(strokeOpacity=0).configure(background="transparent")
             st.altair_chart(chart, width="stretch")
         with table_col:
-            st.markdown(f'<div class="section-title"><span class="section-icon">♜</span><h3>Top {result_top_n} winners</h3></div>', unsafe_allow_html=True)
-            if "Current Price" not in top.columns:
-                top = top.copy()
-                top["Current Price"] = pd.NA
-            leaderboard = top[["Rank", "Symbol", "Security", "GICS Sector", "Current Price", "Quarterly Return %"]].copy()
+            st.markdown(f'<div class="section-title"><span class="section-icon">♜</span><h3>{escape(result_title)}</h3></div>', unsafe_allow_html=True)
+            rank_columns = ["Rank"] if result_view == "Overall leaders" else ["Sector Rank", "Rank"]
+            leaderboard = displayed[rank_columns + ["Symbol", "Security", "GICS Sector", "Current Price", "Quarterly Return %"]].copy()
             leaderboard["Quarterly Return %"] = pd.to_numeric(leaderboard["Quarterly Return %"], errors="coerce")
             leaderboard["Current Price"] = pd.to_numeric(leaderboard["Current Price"], errors="coerce")
             st.dataframe(leaderboard, width="stretch", hide_index=True, height=438, column_config={
                 "Rank": st.column_config.NumberColumn("#", width="small", format="%d"), "Symbol": st.column_config.TextColumn("Ticker", width="small"),
+                "Sector Rank": st.column_config.NumberColumn("Sector #", width="small", format="%d"),
                 "Security": st.column_config.TextColumn("Company", width="medium"),
                 "GICS Sector": st.column_config.TextColumn("Sector", width="medium"),
                 "Current Price": st.column_config.NumberColumn("Price", width="small", format="$%.2f"),
@@ -161,7 +220,8 @@ with tracker_tab:
 
         safe_label = str(result_period.label).replace(" ", "_").replace("/", "-").replace(":", "-")
         download_a, download_b, note_col = st.columns([1, 1, 2])
-        with download_a: st.download_button("Download top winners CSV", top.to_csv(index=False).encode("utf-8-sig"), f"{safe_label}_top_{result_top_n}.csv", "text/csv", width="stretch")
+        view_suffix = "by_sector" if result_view == "Top performers by sector" else f"top_{result_top_n}"
+        with download_a: st.download_button("Download displayed winners CSV", displayed.to_csv(index=False).encode("utf-8-sig"), f"{safe_label}_{view_suffix}.csv", "text/csv", width="stretch")
         with download_b: st.download_button("Download all returns CSV", full.to_csv(index=False).encode("utf-8-sig"), f"{safe_label}_all_returns.csv", "text/csv", width="stretch")
         with note_col: st.markdown(f'<div class="method-note">Benchmark dates: {summary["benchmark_base_date"]} → {summary["benchmark_end_date"]} · {escape(summary["membership_basis"])}</div>', unsafe_allow_html=True)
     else:

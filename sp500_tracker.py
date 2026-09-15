@@ -330,25 +330,12 @@ def run_analysis(
         "Beat Constituent Average By (pp)",
         "Base Trading Date",
         "End Trading Date",
+        "End Adjusted Close",
     ]
 
     full_out = full[display_cols].copy()
     top_count = max(1, int(top_n))
     top = full_out.head(top_count).copy()
-
-    # Current quotes are fetched only for displayed winners to keep the request fast.
-    winner_tickers = full.head(top_count)[["Symbol", "YahooTicker"]]
-    current_prices = download_current_prices(winner_tickers["YahooTicker"].tolist())
-    if not current_prices.empty:
-        current_prices = winner_tickers.merge(current_prices, on="YahooTicker", how="left")
-        top = top.merge(
-            current_prices[["Symbol", "Current Price", "Price As Of"]],
-            on="Symbol",
-            how="left",
-        )
-    else:
-        top["Current Price"] = pd.NA
-        top["Price As Of"] = pd.NaT
 
     summary = {
         "label": period.label,

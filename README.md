@@ -33,6 +33,9 @@ No secrets or API keys are required for this version.
 - Specific quarter
 - Custom date range
 - Top 2 through top 30 winners
+- Searchable multi-sector filtering
+- Top X performers ranked independently within each sector
+- Current price and GICS sector for displayed winners
 - S&P 500 benchmark comparison
 - Simple constituent-average comparison
 - Download top-winner CSV
