@@ -42,7 +42,7 @@ def cached_current_prices(symbols: tuple[str, ...], cache_version: int) -> pd.Da
 
 def add_current_prices(stocks: pd.DataFrame, period_ends_today: bool) -> pd.DataFrame:
     stocks = stocks.drop(columns=["Current Price", "Price As Of"], errors="ignore").copy()
-    if period_ends_today:
+    if period_ends_today and "End Adjusted Close" in stocks.columns:
         stocks["Current Price"] = stocks["End Adjusted Close"]
         stocks["Price As Of"] = stocks["End Trading Date"]
         return stocks
@@ -130,7 +130,7 @@ with tracker_tab:
     if run_clicked and period.start <= today:
         try:
             with st.spinner("Downloading market data and ranking the S&P 500…"):
-                result = cached_analysis(period.start.isoformat(), min(period.end, today).isoformat(), period.label, int(top_n), 3)
+                result = cached_analysis(period.start.isoformat(), min(period.end, today).isoformat(), period.label, int(top_n), 4)
                 st.session_state["analysis_result"] = result
                 st.session_state["analysis_period"] = period
                 st.session_state["analysis_top_n"] = int(top_n)
